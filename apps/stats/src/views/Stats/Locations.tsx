@@ -158,7 +158,7 @@ const Locations:React.FC = () => {
 
     return (
         <StatsLayout>
-            <ViewHeader>
+            <ViewHeader className='before:hidden'>
                 <H1>Locations</H1>
                 <ViewHeaderActions>
                     <AudienceSelect />
@@ -166,8 +166,12 @@ const Locations:React.FC = () => {
                 </ViewHeaderActions>
             </ViewHeader>
             <StatsView data={data} isLoading={isLoading}>
-                <Card variant='plain'>
-                    <CardContent className='-mb-5 border-none pt-8'>
+                <Card>
+                    <CardHeader>
+                        <CardTitle>Top Locations</CardTitle>
+                        <CardDescription>A geographic breakdown of your readers {getPeriodText(range)}</CardDescription>
+                    </CardHeader>
+                    <CardContent>
                         <div className='svg-map-container relative mx-auto max-w-[680px] [&_.svg-map]:stroke-background'>
                             <SVGMap
                                 locationClassName={getLocationClassName}
@@ -195,36 +199,30 @@ const Locations:React.FC = () => {
                                 </div>
                             )}
                         </div>
-                    </CardContent>
-                </Card>
-                <Card variant='plain'>
-                    <CardHeader>
-                        <CardTitle>Top Locations</CardTitle>
-                        <CardDescription>A geographic breakdown of your readers {getPeriodText(range)}</CardDescription>
-                    </CardHeader>
-                    <CardContent>
                         {isLoading ? 'Loading' :
-                            <Table>
-                                <TableHeader>
-                                    <TableRow>
-                                        <TableHead className='w-[80%]'>Country</TableHead>
-                                        <TableHead className='w-[20%] text-right'>Visitors</TableHead>
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {data?.map((row) => {
-                                        const countryName = getCountryName(`${row.location}`) || 'Unknown';
-                                        return (
-                                            <TableRow key={row.location || 'unknown'}>
-                                                <TableCell className="font-medium">
-                                                    <span title={countryName || 'Unknown'}>{getCountryFlag(`${row.location}`)} {countryName}</span>
-                                                </TableCell>
-                                                <TableCell className='text-right font-mono text-sm'>{formatNumber(Number(row.visits))}</TableCell>
-                                            </TableRow>
-                                        );
-                                    })}
-                                </TableBody>
-                            </Table>
+                            <div className='mt-6'>
+                                <Table>
+                                    <TableHeader>
+                                        <TableRow>
+                                            <TableHead className='w-[80%]'>Country</TableHead>
+                                            <TableHead className='w-[20%] text-right'>Visitors</TableHead>
+                                        </TableRow>
+                                    </TableHeader>
+                                    <TableBody>
+                                        {data?.map((row) => {
+                                            const countryName = getCountryName(`${row.location}`) || 'Unknown';
+                                            return (
+                                                <TableRow key={row.location || 'unknown'}>
+                                                    <TableCell className="font-medium">
+                                                        <span title={countryName || 'Unknown'}>{getCountryFlag(`${row.location}`)} {countryName}</span>
+                                                    </TableCell>
+                                                    <TableCell className='text-right font-mono text-sm'>{formatNumber(Number(row.visits))}</TableCell>
+                                                </TableRow>
+                                            );
+                                        })}
+                                    </TableBody>
+                                </Table>
+                            </div>
                         }
                     </CardContent>
                 </Card>
