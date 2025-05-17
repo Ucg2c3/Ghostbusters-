@@ -102,6 +102,13 @@ module.exports = {
                 600: '#DC091E',
                 DEFAULT: '#F50B23'
             },
+            orange: {
+                100: '#FFEDD5',
+                400: '#FB923C',
+                500: '#F97316',
+                600: '#EA580C',
+                DEFAULT: '#F97316'
+            },
             yellow: {
                 100: '#FFF1D6',
                 400: '#FFC247',
@@ -322,7 +329,8 @@ module.exports = {
                 max: 'max-content',
                 fit: 'fit-content',
                 prose: '65ch',
-                page: '148rem'
+                page: '148rem',
+                pageminsidebar: '116rem'
             },
             borderRadius: {
                 sm: 'calc(var(--radius) - 4px)',
