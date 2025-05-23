@@ -1,10 +1,15 @@
 import Growth from './views/Stats/Growth';
 import Locations from './views/Stats/Locations';
-import Sources from './views/Stats/Sources';
+import Newsletters from './views/Stats/Newsletters';
 import Web from './views/Stats/Web';
 import {RouteObject} from '@tryghost/admin-x-framework';
+// import {withFeatureFlag} from './hooks/withFeatureFlag';
 
 export const APP_ROUTE_PREFIX = '/stats';
+
+// Wrap all components with feature flag protection
+//  e.g.
+// const ProtectedNewsletters = withFeatureFlag(Newsletters, 'trafficAnalyticsAlpha', '/web/', 'Newsletters');
 
 export const routes: RouteObject[] = [
     {
@@ -17,15 +22,16 @@ export const routes: RouteObject[] = [
         element: <Web />
     },
     {
-        path: '/sources/',
-        element: <Sources />
-    },
-    {
         path: '/locations/',
         element: <Locations />
     },
     {
         path: '/growth/',
         element: <Growth />
+    }
+    ,
+    {
+        path: '/newsletters/',
+        element: <Newsletters />
     }
 ];

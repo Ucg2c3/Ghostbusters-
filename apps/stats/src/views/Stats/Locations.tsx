@@ -1,22 +1,45 @@
 import AudienceSelect, {getAudienceQueryParam} from './components/AudienceSelect';
 import DateRangeSelect from './components/DateRangeSelect';
 import React, {useState} from 'react';
+import StatsHeader from './layout/StatsHeader';
 import StatsLayout from './layout/StatsLayout';
 import StatsView from './layout/StatsView';
 import World from '@svg-maps/world';
 import countries from 'i18n-iso-countries';
 import enLocale from 'i18n-iso-countries/langs/en.json';
-import {Card, CardContent, CardDescription, CardHeader, CardTitle, H1, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, ViewHeader, ViewHeaderActions, cn, formatNumber, formatQueryDate} from '@tryghost/shade';
+import {Card, CardContent, CardDescription, CardHeader, CardTitle, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, cn, formatNumber, formatQueryDate, getCountryFlag, getRangeDates} from '@tryghost/shade';
 import {STATS_LABEL_MAPPINGS} from '@src/utils/constants';
 import {SVGMap} from 'react-svg-map';
-import {getCountryFlag, getPeriodText, getRangeDates} from '@src/utils/chart-helpers';
-import {getStatEndpointUrl, getToken} from '@src/config/stats-config';
+import {getPeriodText} from '@src/utils/chart-helpers';
+import {getStatEndpointUrl, getToken} from '@tryghost/admin-x-framework';
 import {useGlobalData} from '@src/providers/GlobalDataProvider';
 import {useQuery} from '@tinybirdco/charts';
 
 countries.registerLocale(enLocale);
 const getCountryName = (label: string) => {
     return STATS_LABEL_MAPPINGS[label as keyof typeof STATS_LABEL_MAPPINGS] || countries.getName(label, 'en') || 'Unknown';
+};
+
+// Normalize country code for flag display
+const normalizeCountryCode = (code: string): string => {
+    // Common mappings for countries that might come through with full names
+    const mappings: Record<string, string> = {
+        'UNITED STATES': 'US',
+        'UNITED STATES OF AMERICA': 'US',
+        USA: 'US',
+        'UNITED KINGDOM': 'GB',
+        UK: 'GB',
+        'GREAT BRITAIN': 'GB',
+        NETHERLANDS: 'NL'
+    };
+    
+    const upperCode = code.toUpperCase();
+    return mappings[upperCode] || (code.length > 2 ? code.substring(0, 2) : code);
+};
+
+// Wrapper for getCountryFlag that normalizes the country code first
+const getSafeCountryFlag = (code: string): string => {
+    return getCountryFlag(normalizeCountryCode(code));
 };
 
 interface TooltipData {
@@ -136,14 +159,13 @@ const Locations:React.FC = () => {
     const handleLocationMouseOver = (e: React.MouseEvent<SVGPathElement>) => {
         const target = e.target as SVGPathElement;
         const countryCode = target.getAttribute('id')?.toUpperCase() || '';
-        const countryName = target.getAttribute('name') || '';
         const countryData = transformedData[countryCode];
 
         target.style.opacity = '0.75';
 
         setTooltipData({
             countryCode,
-            countryName,
+            countryName: getCountryName(countryCode),
             visits: countryData ? Number(countryData.visits) : 0,
             x: e.clientX,
             y: e.clientY
@@ -158,16 +180,17 @@ const Locations:React.FC = () => {
 
     return (
         <StatsLayout>
-            <ViewHeader>
-                <H1>Locations</H1>
-                <ViewHeaderActions>
-                    <AudienceSelect />
-                    <DateRangeSelect />
-                </ViewHeaderActions>
-            </ViewHeader>
+            <StatsHeader>
+                <AudienceSelect />
+                <DateRangeSelect />
+            </StatsHeader>
             <StatsView data={data} isLoading={isLoading}>
-                <Card variant='plain'>
-                    <CardContent className='-mb-5 border-none pt-8'>
+                <Card>
+                    <CardHeader>
+                        <CardTitle>Top Locations</CardTitle>
+                        <CardDescription>A geographic breakdown of your readers {getPeriodText(range)}</CardDescription>
+                    </CardHeader>
+                    <CardContent>
                         <div className='svg-map-container relative mx-auto max-w-[680px] [&_.svg-map]:stroke-background'>
                             <SVGMap
                                 locationClassName={getLocationClassName}
@@ -185,7 +208,7 @@ const Locations:React.FC = () => {
                                     }}
                                 >
                                     <div className="flex gap-1">
-                                        <span>{getCountryFlag(tooltipData.countryCode)}</span>
+                                        <span>{getSafeCountryFlag(tooltipData.countryCode)}</span>
                                         <span className="font-medium">{tooltipData.countryName}</span>
                                     </div>
                                     <div className='flex grow items-center justify-between gap-3'>
@@ -195,36 +218,30 @@ const Locations:React.FC = () => {
                                 </div>
                             )}
                         </div>
-                    </CardContent>
-                </Card>
-                <Card variant='plain'>
-                    <CardHeader>
-                        <CardTitle>Top Locations</CardTitle>
-                        <CardDescription>A geographic breakdown of your readers {getPeriodText(range)}</CardDescription>
-                    </CardHeader>
-                    <CardContent>
                         {isLoading ? 'Loading' :
-                            <Table>
-                                <TableHeader>
-                                    <TableRow>
-                                        <TableHead className='w-[80%]'>Country</TableHead>
-                                        <TableHead className='w-[20%] text-right'>Visitors</TableHead>
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {data?.map((row) => {
-                                        const countryName = getCountryName(`${row.location}`) || 'Unknown';
-                                        return (
-                                            <TableRow key={row.location || 'unknown'}>
-                                                <TableCell className="font-medium">
-                                                    <span title={countryName || 'Unknown'}>{getCountryFlag(`${row.location}`)} {countryName}</span>
-                                                </TableCell>
-                                                <TableCell className='text-right font-mono text-sm'>{formatNumber(Number(row.visits))}</TableCell>
-                                            </TableRow>
-                                        );
-                                    })}
-                                </TableBody>
-                            </Table>
+                            <div className='mt-6'>
+                                <Table>
+                                    <TableHeader>
+                                        <TableRow>
+                                            <TableHead className='w-[80%]'>Country</TableHead>
+                                            <TableHead className='w-[20%] text-right'>Visitors</TableHead>
+                                        </TableRow>
+                                    </TableHeader>
+                                    <TableBody>
+                                        {data?.map((row) => {
+                                            const countryName = getCountryName(`${row.location}`) || 'Unknown';
+                                            return (
+                                                <TableRow key={row.location || 'unknown'}>
+                                                    <TableCell className="font-medium">
+                                                        <span title={countryName || 'Unknown'}>{getSafeCountryFlag(`${row.location}`)} {countryName}</span>
+                                                    </TableCell>
+                                                    <TableCell className='text-right font-mono text-sm'>{formatNumber(Number(row.visits))}</TableCell>
+                                                </TableRow>
+                                            );
+                                        })}
+                                    </TableBody>
+                                </Table>
+                            </div>
                         }
                     </CardContent>
                 </Card>
