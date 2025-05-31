@@ -1,5 +1,5 @@
 import React, {useEffect, useState} from 'react';
-import {Button} from '@tryghost/admin-x-design-system';
+import {Button, LucideIcon} from '@tryghost/shade';
 import {ObjectProperties} from '@tryghost/admin-x-framework/api/activitypub';
 import {useAnimatedCounter} from '@hooks/use-animated-counter';
 import {useDerepostMutationForUser, useLikeMutationForUser, useRepostMutationForUser, useUnlikeMutationForUser} from '@hooks/use-activity-pub-queries';
@@ -11,6 +11,7 @@ interface FeedItemStatsProps {
     repostCount: number;
     layout: string;
     disabled?: boolean;
+    buttonClassName?: string;
     onLikeClick: () => void;
     onCommentClick: () => void;
 }
@@ -22,6 +23,7 @@ const FeedItemStats: React.FC<FeedItemStatsProps> = ({
     repostCount: initialRepostCount,
     layout,
     disabled = false,
+    buttonClassName = '',
     onLikeClick,
     onCommentClick
 }) => {
@@ -71,54 +73,45 @@ const FeedItemStats: React.FC<FeedItemStatsProps> = ({
         onLikeClick();
     };
 
-    const buttonClassName = `transition-color flex p-2 ap-action-button items-center justify-center rounded-md text-gray-900 leading-none hover:bg-black/[3%] dark:bg-black dark:hover:bg-gray-950 dark:text-gray-600`;
+    const buttonClass = `px-2 gap-1.5 font-normal text-md [&_svg]:size-[18px] transition-color ap-action-button text-gray-900 hover:text-gray-900 hover:bg-black/[3%] dark:bg-black dark:hover:bg-gray-950 dark:text-gray-600 ${buttonClassName}`;
 
     return (<div className={`flex ${layout !== 'inbox' && 'gap-1'}`}>
         <Button
-            className={`${buttonClassName} ${isLiked ? 'text-pink-500' : 'text-gray-900'}`}
+            className={`${buttonClass} ${isLiked && 'text-pink-500 hover:text-pink-500'}`}
             disabled={disabled}
-            hideLabel={true}
-            icon='heart'
-            iconColorClass={`w-[18px] h-[18px] ${isLiked && 'ap-red-heart text-pink-500 *:!fill-pink-500 hover:text-pink-500'}`}
             id='like'
-            label={new Intl.NumberFormat().format(likeCount)}
-            size='md'
             title={`${isLiked ? 'Undo like' : 'Like'}`}
-            unstyled={true}
+            variant='ghost'
             onClick={(e?: React.MouseEvent<HTMLElement>) => {
                 e?.stopPropagation();
                 if (e) {
                     handleLikeClick(e);
                 }
             }}
-        />
+        >
+            <LucideIcon.Heart className={`${isLiked && 'fill-pink-500 text-pink-500'}`} />
+            {false && likeCount}
+        </Button>
         <Button
-            className={buttonClassName}
+            className={`${buttonClass}`}
             disabled={disabled}
-            hideLabel={commentCount === 0 || (layout === 'inbox')}
-            icon='comment'
-            iconColorClass='w-[18px] h-[18px]'
             id='comment'
-            label={new Intl.NumberFormat().format(commentCount)}
-            size='md'
             title='Reply'
-            unstyled={true}
+            variant='ghost'
             onClick={(e?: React.MouseEvent<HTMLElement>) => {
                 e?.stopPropagation();
                 onCommentClick();
             }}
-        />
+        >
+            <LucideIcon.MessageCircle />
+            {!(commentCount === 0 || (layout === 'inbox')) && new Intl.NumberFormat().format(commentCount)}
+        </Button>
         <Button
-            className={`${buttonClassName} ${isReposted ? 'text-green-500' : 'text-gray-900'}`}
+            className={`${buttonClass} ${isReposted && 'text-green-500 hover:text-green-500'}`}
             disabled={disabled}
-            hideLabel={(initialRepostCount === 0 && !isReposted) || repostCount === 0 || (layout === 'inbox')}
-            icon='reload'
-            iconColorClass={`w-[18px] h-[18px] ${isReposted && 'text-green-500'}`}
             id='repost'
-            label={RepostCounter}
-            size='md'
             title={`${isReposted ? 'Undo repost' : 'Repost'}`}
-            unstyled={true}
+            variant='ghost'
             onClick={(e?: React.MouseEvent<HTMLElement>) => {
                 e?.stopPropagation();
 
@@ -137,7 +130,10 @@ const FeedItemStats: React.FC<FeedItemStatsProps> = ({
 
                 setIsReposted(!isReposted);
             }}
-        />
+        >
+            <LucideIcon.RefreshCw className={`${isReposted && 'text-green-500'}`} />
+            {!((initialRepostCount === 0 && !isReposted) || repostCount === 0 || (layout === 'inbox')) && RepostCounter}
+        </Button>
     </div>);
 };
 
