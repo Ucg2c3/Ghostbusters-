@@ -1,11 +1,11 @@
 import Customizer, {COLOR_OPTIONS, type ColorOption, type FontSize, useCustomizerSettings} from './Customizer';
-import React, {useCallback, useEffect, useRef, useState} from 'react';
+import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import ShowRepliesButton from '@src/components/global/ShowRepliesButton';
 import getUsername from '../../../utils/get-username';
-import {Skeleton} from '@tryghost/shade';
+import {LoadingIndicator, Skeleton} from '@tryghost/shade';
 
-import {LoadingIndicator} from '@tryghost/admin-x-design-system';
 import {renderTimestamp} from '../../../utils/render-timestamp';
-import {usePostForUser, useThreadForUser} from '@hooks/use-activity-pub-queries';
+import {usePostForUser, useReplyChainForUser, useThreadForUser} from '@hooks/use-activity-pub-queries';
 
 import APAvatar from '@src/components/global/APAvatar';
 import APReplyBox from '@src/components/global/APReplyBox';
@@ -16,11 +16,14 @@ import FeedItemStats from '@src/components/feed/FeedItemStats';
 import TableOfContents, {TOCItem} from '@src/components/feed/TableOfContents';
 import articleBodyStyles from '@src/components/articleBodyStyles';
 import getReadingTime from '../../../utils/get-reading-time';
-import {handleProfileClickRR} from '@src/utils/handle-profile-click';
+import {Activity} from '@src/api/activitypub';
+import {handleProfileClick} from '@src/utils/handle-profile-click';
 import {isPendingActivity} from '../../../utils/pending-activity';
+import {mapPostToActivity} from '@src/utils/posts';
 import {openLinksInNewTab} from '@src/utils/content-formatters';
 import {useDebounce} from 'use-debounce';
-import {useLocation, useNavigate} from '@tryghost/admin-x-framework';
+import {useFeatureFlags} from '@src/lib/feature-flags';
+import {useNavigate} from '@tryghost/admin-x-framework';
 
 interface IframeWindow extends Window {
     resizeIframe?: () => void;
@@ -152,6 +155,11 @@ const ArticleBody: React.FC<{
                     const script = document.createElement('script');
                     script.src = '/public/cards.min.js';
                     document.head.appendChild(script);
+
+                    const link = document.createElement('link');
+                    link.rel = 'stylesheet';
+                    link.href = '/public/cards.min.css';
+                    document.head.appendChild(link);
                 });
             </script>
 
@@ -319,7 +327,7 @@ const ArticleBody: React.FC<{
 
             // Get all headings except the article title
             const headingElements = Array.from(
-                iframe.contentDocument.querySelectorAll('h1:not(.gh-article-title), h2, h3, h4, h5, h6')
+                iframe.contentDocument.querySelectorAll('.gh-content > :is(h2, h3, h4, h5, h6)[id]')
             );
 
             if (headingElements.length === 0) {
@@ -407,6 +415,7 @@ export const Reader: React.FC<ReaderProps> = ({
     postId = null,
     onClose
 }) => {
+    const {isEnabled} = useFeatureFlags();
     const {
         backgroundColor,
         currentFontSizeIndex,
@@ -419,28 +428,62 @@ export const Reader: React.FC<ReaderProps> = ({
         resetFontSize
     } = useCustomizerSettings();
     const modalRef = useRef<HTMLElement>(null);
-    const [focusReply, setFocusReply] = useState(false);
     const [isCustomizerOpen, setIsCustomizerOpen] = useState(false);
     const [isTOCOpen, setIsTOCOpen] = useState(false);
-    const location = useLocation();
 
-    useEffect(() => {
-        const searchParams = new URLSearchParams(location.search);
-        if (searchParams.get('focusReply') === 'true') {
-            setFocusReply(true);
-        }
-    }, [location.search, setFocusReply]);
+    const shouldFetchReplyChain = isEnabled('reply-chain');
 
-    const {data: post, isLoading: isLoadingPost} = usePostForUser('index', postId);
-    const activityData = post;
+    const {data: post, isLoading: isLoadingPost} = usePostForUser('index', shouldFetchReplyChain ? null : postId);
+    const {data: thread, isLoading: isLoadingThreadData} = useThreadForUser('index', shouldFetchReplyChain ? '' : (post?.id ?? ''));
+    const {data: replyChain, isLoading: isReplyChainLoading} = useReplyChainForUser('index', shouldFetchReplyChain ? postId : '');
+
+    const currentPost = shouldFetchReplyChain
+        ? (replyChain?.post ? mapPostToActivity(replyChain.post) : undefined)
+        : post;
+    const activityData = currentPost;
     const activityId = activityData?.id;
     const object = activityData?.object;
     const actor = activityData?.actor;
-    const authors = activityData?.object.metadata.ghostAuthors;
+    const authors = activityData?.object?.metadata?.ghostAuthors;
 
-    const {data: thread, isLoading: isLoadingThread} = useThreadForUser('index', activityId);
-    const threadPostIdx = (thread?.posts ?? []).findIndex(item => item.object.id === activityId);
-    const threadChildren = (thread?.posts ?? []).slice(threadPostIdx + 1);
+    const threadPostIdx = shouldFetchReplyChain ? -1 : (thread?.posts ?? []).findIndex(item => item.object.id === activityId);
+
+    const threadChildren = useMemo(() => {
+        return shouldFetchReplyChain ? [] : (thread?.posts ?? []).slice(threadPostIdx + 1);
+    }, [shouldFetchReplyChain, thread?.posts, threadPostIdx]);
+
+    const [expandedChains, setExpandedChains] = useState<Set<string>>(new Set());
+
+    const processedReplies = useMemo(() => {
+        if (!shouldFetchReplyChain) {
+            return threadChildren;
+        }
+
+        return (replyChain?.children ?? []).map((childData) => {
+            const mainReply = mapPostToActivity(childData.post);
+            const chainItems = childData.chain ? childData.chain.map(mapPostToActivity) : [];
+
+            return {
+                mainReply,
+                chain: chainItems
+            };
+        });
+    }, [shouldFetchReplyChain, threadChildren, replyChain?.children]);
+
+    function toggleChain(chainId: string) {
+        setExpandedChains((prev) => {
+            const newSet = new Set(prev);
+            if (newSet.has(chainId)) {
+                newSet.delete(chainId);
+            } else {
+                newSet.add(chainId);
+            }
+            return newSet;
+        });
+    }
+
+    const isLoadingThread = shouldFetchReplyChain ? isReplyChainLoading : (isLoadingPost || isLoadingThreadData);
+    const isLoadingMainPost = shouldFetchReplyChain ? isReplyChainLoading : isLoadingPost;
 
     const [replyCount, setReplyCount] = useState(object?.replyCount ?? 0);
 
@@ -463,7 +506,6 @@ export const Reader: React.FC<ReaderProps> = ({
         setReplyCount((current: number) => current - step);
     }
 
-    const replyBoxRef = useRef<HTMLDivElement>(null);
     const repliesRef = useRef<HTMLDivElement>(null);
 
     const currentMaxWidth = '904px';
@@ -606,157 +648,259 @@ export const Reader: React.FC<ReaderProps> = ({
 
     return (
         <div ref={modalRef as React.RefObject<HTMLDivElement>} className={`max-h-full overflow-auto rounded-md ${backgroundColor === 'DARK' && 'dark'} ${(backgroundColor === 'LIGHT' || backgroundColor === 'SEPIA') && 'light'} ${COLOR_OPTIONS[backgroundColor].background}`}>
-            {
-                isLoadingPost ? (
-                    <LoadingIndicator size='lg' />
-                ) : (
-                    <>
-                        <div className='flex h-full flex-col'>
-                            <div className='relative flex-1'>
-                                <div className={`sticky top-0 z-50 flex h-[102px] items-center justify-center rounded-t-md border-b ${COLOR_OPTIONS[backgroundColor].background} ${COLOR_OPTIONS[backgroundColor].border}`}>
-                                    <div
-                                        className='grid w-full px-8'
-                                        style={{
-                                            gridTemplateColumns: `1fr minmax(0,${currentGridWidth}) 1fr`
-                                        }}
-                                    >
-                                        <div className='flex items-center'>
-                                            <BackButton className={COLOR_OPTIONS[backgroundColor].button} onClick={onClose} />
+
+            <>
+                <div className='flex h-full flex-col'>
+                    <div className='relative flex-1'>
+                        <div className={`sticky top-0 z-50 flex h-[102px] items-center justify-center rounded-t-md border-b ${COLOR_OPTIONS[backgroundColor].background} ${COLOR_OPTIONS[backgroundColor].border}`}>
+                            <div
+                                className='grid w-full px-8'
+                                style={{
+                                    gridTemplateColumns: `1fr minmax(0,${currentGridWidth}) 1fr`
+                                }}
+                            >
+                                <div className='flex items-center'>
+                                    <BackButton className={COLOR_OPTIONS[backgroundColor].button} onClick={onClose} />
+                                </div>
+                                <div className='col-[2/3] mx-auto flex w-full items-center gap-3'>
+                                    <div className='relative z-10 pt-[3px]'>
+                                        <APAvatar author={actor}/>
+                                    </div>
+                                    <div className='relative z-10 mt-0.5 flex w-full min-w-0 cursor-pointer flex-col overflow-visible text-[1.5rem]' onClick={e => handleProfileClick(actor, navigate, e)}>
+                                        <div className='flex w-full'>
+                                            <span className='min-w-0 truncate whitespace-nowrap font-semibold text-black hover:underline dark:text-white'>{isLoadingMainPost ? <Skeleton className='w-20' /> : actor.name}</span>
                                         </div>
-                                        <div className='col-[2/3] mx-auto flex w-full items-center gap-3'>
-                                            <div className='relative z-10 pt-[3px]'>
-                                                <APAvatar author={actor}/>
-                                            </div>
-                                            <div className='relative z-10 flex w-full min-w-0 cursor-pointer flex-col overflow-visible text-[1.5rem]' onClick={e => handleProfileClickRR(actor, navigate, e)}>
-                                                <div className='flex w-full'>
-                                                    <span className='min-w-0 truncate whitespace-nowrap font-semibold text-black hover:underline dark:text-white'>{actor.name}</span>
-                                                </div>
-                                                <div className='flex w-full'>
-                                                    <span className='text-gray-700 after:mx-1 after:font-normal after:text-gray-700 after:content-["·"]'>{getUsername(actor)}</span>
-                                                    <span className='text-gray-700'>{renderTimestamp(object, !object.authored)}</span>
-                                                </div>
-                                            </div>
-                                        </div>
-                                        <div className='col-[3/4] flex items-center justify-end gap-2'>
-                                            <Customizer
-                                                backgroundColor={backgroundColor}
-                                                currentFontSizeIndex={currentFontSizeIndex}
-                                                fontStyle={fontStyle}
-                                                onColorChange={handleColorChange}
-                                                onDecreaseFontSize={decreaseFontSize}
-                                                onFontStyleChange={setFontStyle}
-                                                onIncreaseFontSize={increaseFontSize}
-                                                onOpenChange={setIsCustomizerOpen}
-                                                onResetFontSize={resetFontSize}
-                                            />
+                                        <div className='flex w-full'>
+                                            {!isLoadingMainPost && <span className='text-gray-700 after:mx-1 after:font-normal after:text-gray-700 after:content-["·"]'>{getUsername(actor)}</span>}
+                                            <span className='text-gray-700'>{isLoadingMainPost ? <Skeleton className='w-[120px]' /> : renderTimestamp(object, !object.authored)}</span>
                                         </div>
                                     </div>
                                 </div>
-                                <div className='relative flex-1'>
-                                    <TableOfContents
-                                        iframeElement={iframeElement}
-                                        modalRef={modalRef}
-                                        tocItems={tocItems}
-                                        onOpenChange={setIsTOCOpen}
+                                <div className='col-[3/4] flex items-center justify-end gap-2'>
+                                    <Customizer
+                                        backgroundColor={backgroundColor}
+                                        currentFontSizeIndex={currentFontSizeIndex}
+                                        fontStyle={fontStyle}
+                                        onColorChange={handleColorChange}
+                                        onDecreaseFontSize={decreaseFontSize}
+                                        onFontStyleChange={setFontStyle}
+                                        onIncreaseFontSize={increaseFontSize}
+                                        onOpenChange={setIsCustomizerOpen}
+                                        onResetFontSize={resetFontSize}
                                     />
-                                    <div className='grow overflow-y-auto'>
-                                        <div className={`mx-auto px-8 pb-10 pt-5`} style={{maxWidth: currentMaxWidth}}>
-                                            <div className='flex flex-col items-center pb-8' id='object-content'>
-                                                <ArticleBody
-                                                    authors={authors}
-                                                    backgroundColor={backgroundColor}
-                                                    excerpt={object?.preview?.content ?? ''}
-                                                    fontSize={fontSize}
-                                                    fontStyle={fontStyle}
-                                                    heading={object.name}
-                                                    html={object.content ?? ''}
-                                                    image={typeof object.image === 'string' ? object.image : object.image?.url}
-                                                    isPopoverOpen={isCustomizerOpen || isTOCOpen}
-                                                    postUrl={object?.url || ''}
-                                                    onHeadingsExtracted={handleHeadingsExtracted}
-                                                    onIframeLoad={handleIframeLoad}
-                                                    onLoadingChange={setIsLoading}
-                                                />
-                                                <div className='-ml-3 w-full' style={{maxWidth: currentGridWidth}}>
-                                                    <FeedItemStats
-                                                        commentCount={replyCount}
-                                                        layout={'modal'}
-                                                        likeCount={1}
-                                                        object={object}
-                                                        repostCount={object.repostCount ?? 0}
-                                                        onCommentClick={() => {
-                                                            repliesRef.current?.scrollIntoView({
-                                                                behavior: 'smooth',
-                                                                block: 'center'
-                                                            });
-                                                            setFocusReply(true);
-                                                        }}
-                                                        onLikeClick={onLikeClick}
-                                                    />
-                                                </div>
-                                            </div>
-                                            {object.type === 'Tombstone' && (
-                                                <DeletedFeedItem last={true} />
-                                            )}
+                                </div>
+                            </div>
+                        </div>
+                        <div className='relative flex-1'>
+                            <TableOfContents
+                                iframeElement={iframeElement}
+                                modalRef={modalRef}
+                                tocItems={tocItems}
+                                onOpenChange={setIsTOCOpen}
+                            />
+                            {!isLoadingMainPost && <div className='grow overflow-y-auto'>
+                                <div className={`mx-auto px-8 pb-10 pt-5`} style={{maxWidth: currentMaxWidth}}>
+                                    <div className='flex flex-col items-center pb-8' id='object-content'>
+                                        <ArticleBody
+                                            authors={authors}
+                                            backgroundColor={backgroundColor}
+                                            excerpt={object.summary ?? ''}
+                                            fontSize={fontSize}
+                                            fontStyle={fontStyle}
+                                            heading={object.name}
+                                            html={object.content ?? ''}
+                                            image={typeof object.image === 'string' ? object.image : object.image?.url}
+                                            isPopoverOpen={isCustomizerOpen || isTOCOpen}
+                                            postUrl={object?.url || ''}
+                                            onHeadingsExtracted={handleHeadingsExtracted}
+                                            onIframeLoad={handleIframeLoad}
+                                            onLoadingChange={setIsLoading}
+                                        />
+                                        <div className='-ml-3 w-full' style={{maxWidth: currentGridWidth}}>
+                                            <FeedItemStats
+                                                actor={actor}
+                                                commentCount={replyCount}
+                                                layout={'modal'}
+                                                likeCount={object.likeCount ?? 0}
+                                                object={object}
+                                                repostCount={object.repostCount ?? 0}
+                                                onLikeClick={onLikeClick}
+                                                onReplyCountChange={incrementReplyCount}
+                                            />
+                                        </div>
+                                    </div>
+                                    {object.type === 'Tombstone' && (
+                                        <DeletedFeedItem last={true} />
+                                    )}
 
-                                            <div ref={replyBoxRef} className='mx-auto w-full border-t border-black/[8%] dark:border-gray-950' style={{maxWidth: currentGridWidth}}>
-                                                <APReplyBox
-                                                    focused={focusReply ? 1 : 0}
-                                                    object={object}
-                                                    onReply={incrementReplyCount}
-                                                    onReplyError={decrementReplyCount}
-                                                />
-                                                <FeedItemDivider />
-                                            </div>
+                                    <div className='mx-auto w-full border-t border-black/[8%] dark:border-gray-950' style={{maxWidth: currentGridWidth}}>
+                                        <APReplyBox
+                                            object={object}
+                                            onReply={() => incrementReplyCount(1)}
+                                            onReplyError={() => decrementReplyCount(1)}
+                                        />
+                                        <FeedItemDivider />
+                                    </div>
 
-                                            {isLoadingThread && <LoadingIndicator size='lg' />}
+                                    {isLoadingThread && <LoadingIndicator size='lg' />}
 
-                                            <div ref={repliesRef} className='mx-auto w-full' style={{maxWidth: currentGridWidth}}>
-                                                {threadChildren.map((item, index) => {
-                                                    const showDivider = index !== threadChildren.length - 1;
+                                    <div ref={repliesRef} className='mx-auto w-full' style={{maxWidth: currentGridWidth}}>
+                                        {!shouldFetchReplyChain ? (
+                                            threadChildren.map((item, index) => {
+                                                const showDivider = index !== threadChildren.length - 1;
 
+                                                return (
+                                                    <React.Fragment key={item.id}>
+                                                        <FeedItem
+                                                            actor={item.actor}
+                                                            allowDelete={item.object.authored}
+                                                            commentCount={item.object.replyCount ?? 0}
+                                                            isPending={isPendingActivity(item.id)}
+                                                            last={true}
+                                                            layout='reply'
+                                                            likeCount={item.object.likeCount ?? 0}
+                                                            object={item.object}
+                                                            parentId={object.id}
+                                                            repostCount={item.object.repostCount ?? 0}
+                                                            type='Note'
+                                                            onClick={() => {
+                                                                navigate(`/feed/${encodeURIComponent(item.object.id)}`);
+                                                            }}
+                                                            onDelete={() => decrementReplyCount()}
+                                                        />
+                                                        {showDivider && <FeedItemDivider />}
+                                                    </React.Fragment>
+                                                );
+                                            })
+                                        ) : (
+                                            processedReplies.map((replyGroup, groupIndex) => {
+                                                if ('id' in replyGroup) {
+                                                    const showDivider = groupIndex !== processedReplies.length - 1;
                                                     return (
-                                                        <React.Fragment key={item.id}>
+                                                        <React.Fragment key={replyGroup.id}>
                                                             <FeedItem
-                                                                actor={item.actor}
-                                                                allowDelete={item.object.authored}
-                                                                commentCount={item.object.replyCount ?? 0}
-                                                                isPending={isPendingActivity(item.id)}
+                                                                actor={replyGroup.actor}
+                                                                allowDelete={replyGroup.object.authored}
+                                                                commentCount={replyGroup.object.replyCount ?? 0}
+                                                                isPending={isPendingActivity(replyGroup.id)}
                                                                 last={true}
                                                                 layout='reply'
-                                                                object={item.object}
+                                                                likeCount={replyGroup.object.likeCount ?? 0}
+                                                                object={replyGroup.object}
                                                                 parentId={object.id}
-                                                                repostCount={item.object.repostCount ?? 0}
+                                                                repostCount={replyGroup.object.repostCount ?? 0}
                                                                 type='Note'
                                                                 onClick={() => {
-                                                                    navigate(`/feed/${encodeURIComponent(item.object.id)}`);
+                                                                    navigate(`/feed/${encodeURIComponent(replyGroup.object.id)}`);
                                                                 }}
-                                                                onCommentClick={() => {
-                                                                    navigate(`/feed/${encodeURIComponent(item.object.id)}?focusReply=true`);
-                                                                }}
-                                                                onDelete={decrementReplyCount}
+                                                                onDelete={() => decrementReplyCount()}
                                                             />
                                                             {showDivider && <FeedItemDivider />}
                                                         </React.Fragment>
                                                     );
-                                                })}
-                                            </div>
-                                        </div>
+                                                } else {
+                                                    const isLastGroup = groupIndex === processedReplies.length - 1;
+                                                    const chainId = replyGroup.mainReply.id;
+                                                    const isExpanded = expandedChains.has(chainId);
+                                                    const hasChain = replyGroup.chain.length > 0;
+
+                                                    return (
+                                                        <React.Fragment key={replyGroup.mainReply.id}>
+                                                            <FeedItem
+                                                                actor={replyGroup.mainReply.actor}
+                                                                allowDelete={replyGroup.mainReply.object.authored}
+                                                                commentCount={replyGroup.mainReply.object.replyCount ?? 0}
+                                                                isChainParent={hasChain}
+                                                                isPending={isPendingActivity(replyGroup.mainReply.id)}
+                                                                last={!hasChain}
+                                                                layout='reply'
+                                                                likeCount={replyGroup.mainReply.object.likeCount ?? 0}
+                                                                object={replyGroup.mainReply.object}
+                                                                parentId={object.id}
+                                                                repostCount={replyGroup.mainReply.object.repostCount ?? 0}
+                                                                type='Note'
+                                                                onClick={() => {
+                                                                    navigate(`/feed/${encodeURIComponent(replyGroup.mainReply.object.id)}`);
+                                                                }}
+                                                                onDelete={() => decrementReplyCount()}
+                                                            />
+
+                                                            {hasChain && replyGroup.chain[0] && (
+                                                                <FeedItem
+                                                                    key={replyGroup.chain[0].id}
+                                                                    actor={replyGroup.chain[0].actor}
+                                                                    allowDelete={replyGroup.chain[0].object.authored}
+                                                                    commentCount={replyGroup.chain[0].object.replyCount ?? 0}
+                                                                    isChainContinuation={true}
+                                                                    isPending={isPendingActivity(replyGroup.chain[0].id)}
+                                                                    last={replyGroup.chain.length === 1}
+                                                                    layout='reply'
+                                                                    likeCount={replyGroup.chain[0].object.likeCount ?? 0}
+                                                                    object={replyGroup.chain[0].object}
+                                                                    parentId={object.id}
+                                                                    repostCount={replyGroup.chain[0].object.repostCount ?? 0}
+                                                                    type='Note'
+                                                                    onClick={() => {
+                                                                        navigate(`/feed/${encodeURIComponent(replyGroup.chain[0].object.id)}`);
+                                                                    }}
+                                                                    onDelete={() => decrementReplyCount()}
+                                                                />
+                                                            )}
+
+                                                            {hasChain && isExpanded && replyGroup.chain.slice(1).map((chainItem: Activity, chainIndex: number) => {
+                                                                const isLastChainItem = chainIndex === replyGroup.chain.slice(1).length - 1;
+
+                                                                return (
+                                                                    <FeedItem
+                                                                        key={chainItem.id}
+                                                                        actor={chainItem.actor}
+                                                                        allowDelete={chainItem.object.authored}
+                                                                        commentCount={chainItem.object.replyCount ?? 0}
+                                                                        isChainContinuation={true}
+                                                                        isPending={isPendingActivity(chainItem.id)}
+                                                                        last={isLastChainItem}
+                                                                        layout='reply'
+                                                                        likeCount={chainItem.object.likeCount ?? 0}
+                                                                        object={chainItem.object}
+                                                                        parentId={object.id}
+                                                                        repostCount={chainItem.object.repostCount ?? 0}
+                                                                        type='Note'
+                                                                        onClick={() => {
+                                                                            navigate(`/feed/${encodeURIComponent(chainItem.object.id)}`);
+                                                                        }}
+                                                                        onDelete={() => decrementReplyCount()}
+                                                                    />
+                                                                );
+                                                            })}
+
+                                                            {hasChain && replyGroup.chain.length > 1 && !isExpanded && (
+                                                                <ShowRepliesButton
+                                                                    count={replyGroup.chain.length - 1}
+                                                                    onClick={() => toggleChain(chainId)}
+                                                                />
+                                                            )}
+
+                                                            {!isLastGroup && <FeedItemDivider />}
+                                                        </React.Fragment>
+                                                    );
+                                                }
+                                            })
+                                        )}
                                     </div>
                                 </div>
-                            </div>
-                            <div className='pointer-events-none !visible sticky bottom-0 hidden items-end justify-between px-10 pb-[42px] lg:!flex'>
-                                <div className='pointer-events-auto text-gray-600'>
-                                    {getReadingTime(object.content ?? '')}
-                                </div>
-                                <div key={readingProgress} className='pointer-events-auto min-w-10 text-right text-gray-600 transition-all duration-200 ease-out'>
-                                    {readingProgress}%
-                                </div>
-                            </div>
+                            </div>}
                         </div>
-                    </>
-                )
-            }
+                    </div>
+                    {!isLoadingMainPost && <div className='pointer-events-none !visible sticky bottom-0 hidden items-end justify-between px-10 pb-[42px] lg:!flex'>
+                        <div className='pointer-events-auto text-gray-600'>
+                            {getReadingTime(object.content ?? '')}
+                        </div>
+                        <div key={readingProgress} className='pointer-events-auto min-w-10 text-right text-gray-600 transition-all duration-200 ease-out'>
+                            {readingProgress}%
+                        </div>
+                    </div>}
+                </div>
+            </>
         </div>
     );
 };
