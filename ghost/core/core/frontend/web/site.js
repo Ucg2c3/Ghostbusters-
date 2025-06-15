@@ -6,7 +6,6 @@ const {MemberPageViewEvent} = require('../../shared/events');
 
 // App requires
 const config = require('../../shared/config');
-const constants = require('@tryghost/constants');
 const storage = require('../../server/adapters/storage');
 const urlUtils = require('../../shared/url-utils');
 const sitemapHandler = require('../services/sitemap/handler');
@@ -23,8 +22,8 @@ const errorHandler = require('@tryghost/mw-error-handler');
 const mw = require('./middleware');
 
 const STATIC_IMAGE_URL_PREFIX = `/${urlUtils.STATIC_IMAGE_URL_PREFIX}`;
-const STATIC_MEDIA_URL_PREFIX = `/${constants.STATIC_MEDIA_URL_PREFIX}`;
-const STATIC_FILES_URL_PREFIX = `/${constants.STATIC_FILES_URL_PREFIX}`;
+const STATIC_MEDIA_URL_PREFIX = `/${config.getStaticUrlPrefix('media')}`;
+const STATIC_FILES_URL_PREFIX = `/${config.getStaticUrlPrefix('files')}`;
 
 let router;
 
@@ -76,26 +75,8 @@ module.exports = function setupSiteApp(routerConfig) {
     siteApp.use(mw.servePublicFile('static', 'public/ghost-stats.min.js', 'application/javascript', config.get('caching:publicAssets:maxAge')));
 
     // Card assets
-    const cardAssetsCSSPath = 'public/cards.min.css';
-    const cardAssetsJSPath = 'public/cards.min.js';
-    siteApp.use(
-        function serveCardAssetsCssMiddleware(req, res, next) {
-            if (req.path === `/${cardAssetsCSSPath}`) {
-                return cardAssets.serveMiddleware()(req, res, next);
-            }
-            next();
-        },
-        mw.servePublicFile('built', cardAssetsCSSPath, 'text/css', config.get('caching:publicAssets:maxAge'))
-    );
-    siteApp.use(
-        function serveCardAssetsJsMiddleware(req, res, next) {
-            if (req.path === `/${cardAssetsJSPath}`) {
-                return cardAssets.serveMiddleware()(req, res, next);
-            }
-            next();
-        },
-        mw.servePublicFile('built', cardAssetsJSPath, 'application/javascript', config.get('caching:publicAssets:maxAge'))
-    );
+    siteApp.use(cardAssets.serveMiddleware(), mw.servePublicFile('built', 'public/cards.min.css', 'text/css', config.get('caching:publicAssets:maxAge')));
+    siteApp.use(cardAssets.serveMiddleware(), mw.servePublicFile('built', 'public/cards.min.js', 'application/javascript', config.get('caching:publicAssets:maxAge')));
 
     // Comment counts
     siteApp.use(mw.servePublicFile('static', 'public/comment-counts.min.js', 'application/javascript', config.get('caching:publicAssets:maxAge')));
@@ -176,6 +157,19 @@ module.exports = function setupSiteApp(routerConfig) {
     });
 
     debug('General middleware done');
+
+    // Middleware to set analytics indicator header when analytics tracking is included
+    siteApp.use(function ghostAnalyticsHeaderMiddleware(req, res, next) {
+        const originalSend = res.send;
+        // Has to be on res.send otherwise this executes prior to ghost_head
+        res.send = function (data) {
+            if (res.locals && (res.locals.ghostAnalytics)) {
+                res.set('X-Ghost-Analytics', 'true');
+            }
+            return originalSend.call(this, data);
+        };
+        next();
+    });
 
     router = siteRoutes(routerConfig);
     Object.setPrototypeOf(SiteRouter, router);
